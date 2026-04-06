@@ -1,6 +1,6 @@
 FROM mcr.microsoft.com/devcontainers/go:1.25-bookworm
 
-WORKDIR /workspaces/heimdall-app
+WORKDIR /workspaces
 
 # Remove Yarn repository with expired GPG key (comes pre-configured in base image)
 RUN rm -f /etc/apt/sources.list.d/yarn.list 2>/dev/null || true
