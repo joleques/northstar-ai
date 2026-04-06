@@ -205,6 +205,91 @@ func (g FilesystemGateway) InitTarget(ctx context.Context, request usecase.InitR
 	return result, nil
 }
 
+func (g FilesystemGateway) UpdateApp(ctx context.Context, request usecase.UpdateAppRequest) (usecase.UpdateAppResult, error) {
+	layout, err := resolveLayout(request.Target, request.OutputDir)
+	if err != nil {
+		return usecase.UpdateAppResult{}, err
+	}
+
+	sourceDir := strings.TrimSpace(g.templateSourceDir)
+	if sourceDir == "" {
+		return usecase.UpdateAppResult{}, fmt.Errorf("template source unavailable for update-app")
+	}
+
+	currentPlatformSkills, err := g.loadPlatformSkillsFromToolsDir(filepath.Join(sourceDir, "tools"))
+	if err != nil {
+		return usecase.UpdateAppResult{}, err
+	}
+
+	previousPlatformSkills, err := g.loadPlatformSkillsFromToolsDir(filepath.Join(resolveHeimdallLayout(request.OutputDir).TemplateDir, "tools"))
+	if err != nil {
+		return usecase.UpdateAppResult{}, err
+	}
+
+	result := usecase.UpdateAppResult{
+		Removed:   []string{},
+		Installed: []string{},
+		Skipped:   []string{},
+		Failed:    []string{},
+		Warnings:  []string{},
+	}
+
+	platformSkillNames := make(map[string]struct{}, len(currentPlatformSkills)+len(previousPlatformSkills))
+	for _, skill := range currentPlatformSkills {
+		platformSkillNames[skill.Name] = struct{}{}
+	}
+	for _, skill := range previousPlatformSkills {
+		platformSkillNames[skill.Name] = struct{}{}
+	}
+
+	for skillName := range platformSkillNames {
+		path := filepath.Join(layout.SkillsDir, skillName)
+		if _, err := os.Stat(path); err != nil {
+			if os.IsNotExist(err) {
+				result.Skipped = append(result.Skipped, "skill:"+skillName)
+				continue
+			}
+
+			result.Failed = append(result.Failed, "skill:"+skillName)
+			result.Warnings = append(result.Warnings, fmt.Sprintf("stat platform skill %q: %v", path, err))
+			continue
+		}
+
+		if err := os.RemoveAll(path); err != nil {
+			result.Failed = append(result.Failed, "skill:"+skillName)
+			result.Warnings = append(result.Warnings, fmt.Sprintf("remove platform skill %q: %v", path, err))
+			continue
+		}
+
+		result.Removed = append(result.Removed, "skill:"+skillName)
+	}
+
+	templateOutput, templateErr := g.copyTemplateSnapshot(request.OutputDir, true)
+	if templateErr != nil {
+		return usecase.UpdateAppResult{}, templateErr
+	}
+	if templateOutput.Path != "" {
+		result.Installed = append(result.Installed, templateOutput.Path)
+	}
+
+	skillsResult, err := g.InstallSkills(ctx, usecase.InstallRequest{
+		Target:       request.Target,
+		Force:        true,
+		OutputDir:    request.OutputDir,
+		SkipWrappers: true,
+	}, currentPlatformSkills)
+	if err != nil {
+		return usecase.UpdateAppResult{}, err
+	}
+
+	result.Installed = append(result.Installed, skillsResult.Installed...)
+	result.Skipped = append(result.Skipped, skillsResult.Skipped...)
+	result.Failed = append(result.Failed, skillsResult.Failed...)
+	result.Warnings = append(result.Warnings, skillsResult.Warnings...)
+
+	return result, nil
+}
+
 func (g FilesystemGateway) ensureProjectContextTarget(request usecase.InitRequest) (fileWriteOutput, error) {
 	layout := resolveProjectContextLayout(request.OutputDir)
 	created, err := createDirWithIdempotency(layout.RootDir, request.Force)
@@ -241,13 +326,33 @@ func (g FilesystemGateway) installPlatformTools(ctx context.Context, request use
 		return usecase.InstallResult{}, nil
 	}
 
-	toolsDir := filepath.Join(sourceDir, "tools")
+	skills, err := g.loadPlatformSkillsFromToolsDir(filepath.Join(sourceDir, "tools"))
+	if err != nil {
+		return usecase.InstallResult{}, err
+	}
+
+	installRequest := usecase.InstallRequest{
+		Target:       request.Target,
+		Force:        request.Force,
+		OutputDir:    request.OutputDir,
+		SkipWrappers: true,
+	}
+
+	skillsResult, err := g.InstallSkills(ctx, installRequest, skills)
+	if err != nil {
+		return usecase.InstallResult{}, err
+	}
+
+	return skillsResult, nil
+}
+
+func (g FilesystemGateway) loadPlatformSkillsFromToolsDir(toolsDir string) ([]usecase.SkillAsset, error) {
 	entries, err := os.ReadDir(toolsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return usecase.InstallResult{}, nil
+			return []usecase.SkillAsset{}, nil
 		}
-		return usecase.InstallResult{}, fmt.Errorf("read tools dir for platform auto-install: %w", err)
+		return nil, fmt.Errorf("read tools dir for platform auto-install: %w", err)
 	}
 
 	skills := make([]usecase.SkillAsset, 0)
@@ -264,7 +369,7 @@ func (g FilesystemGateway) installPlatformTools(ctx context.Context, request use
 		toolPath := filepath.Join(toolsDir, entry.Name())
 		tool, err := parseTemplateToolYAML(toolPath)
 		if err != nil {
-			return usecase.InstallResult{}, err
+			return nil, err
 		}
 
 		if !hasCategory(tool.Categories, "platform") {
@@ -273,19 +378,23 @@ func (g FilesystemGateway) installPlatformTools(ctx context.Context, request use
 
 		switch normalizeTemplateToolType(tool.Type) {
 		case "skill":
-			skill := usecase.SkillAsset{
-				Name: strings.TrimSpace(tool.Name),
+			skillName := strings.TrimSpace(tool.Name)
+			if skillName == "" {
+				return nil, fmt.Errorf("validate platform tool %q: skill name is required", toolPath)
+			}
+
+			skills = append(skills, usecase.SkillAsset{
+				Name: skillName,
 				Contract: &usecase.SkillContract{
-					Name:         strings.TrimSpace(tool.Name),
+					Name:         skillName,
 					Description:  strings.TrimSpace(tool.Description),
 					Instructions: strings.TrimSpace(tool.Instructions),
 				},
-			}
-			skills = append(skills, skill)
+			})
 		case "assistant":
 			assistantID := strings.TrimSpace(tool.ID)
 			if assistantID == "" {
-				return usecase.InstallResult{}, fmt.Errorf("validate platform tool %q: assistant id is required", toolPath)
+				return nil, fmt.Errorf("validate platform tool %q: assistant id is required", toolPath)
 			}
 
 			assistantName := strings.TrimSpace(tool.Name)
@@ -302,23 +411,11 @@ func (g FilesystemGateway) installPlatformTools(ctx context.Context, request use
 				},
 			})
 		default:
-			return usecase.InstallResult{}, fmt.Errorf("validate platform tool %q: unsupported type %q", toolPath, tool.Type)
+			return nil, fmt.Errorf("validate platform tool %q: unsupported type %q", toolPath, tool.Type)
 		}
 	}
 
-	installRequest := usecase.InstallRequest{
-		Target:       request.Target,
-		Force:        request.Force,
-		OutputDir:    request.OutputDir,
-		SkipWrappers: true,
-	}
-
-	skillsResult, err := g.InstallSkills(ctx, installRequest, skills)
-	if err != nil {
-		return usecase.InstallResult{}, err
-	}
-
-	return skillsResult, nil
+	return skills, nil
 }
 
 func (g FilesystemGateway) InstallSkills(_ context.Context, request usecase.InstallRequest, skills []usecase.SkillAsset) (usecase.InstallResult, error) {

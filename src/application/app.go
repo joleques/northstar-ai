@@ -20,6 +20,7 @@ type App struct {
 	initTargetUC       usecase.InitTarget
 	startProjectUC     usecase.StartProject
 	listLibraryUC      usecase.ListLibrary
+	updateAppUC        usecase.UpdateApp
 }
 
 func NewApp(out io.Writer) App {
@@ -35,6 +36,7 @@ func NewApp(out io.Writer) App {
 	initUC := usecase.NewInitTargetUseCase(installGateway)
 	startUC := usecase.NewStartProjectUseCase(installGateway)
 	listUC := usecase.NewListLibraryUseCase(catalogGateway)
+	updateUC := usecase.NewUpdateAppUseCase(installGateway, installGateway)
 
 	return App{
 		in:                 os.Stdin,
@@ -43,10 +45,11 @@ func NewApp(out io.Writer) App {
 		initTargetUC:       initUC,
 		startProjectUC:     startUC,
 		listLibraryUC:      listUC,
+		updateAppUC:        updateUC,
 	}
 }
 
-func NewAppWithUseCases(in io.Reader, out io.Writer, installAssistantUC usecase.InstallAssistant, initTargetUC usecase.InitTarget, startProjectUC usecase.StartProject, listLibraryUC usecase.ListLibrary) App {
+func NewAppWithUseCases(in io.Reader, out io.Writer, installAssistantUC usecase.InstallAssistant, initTargetUC usecase.InitTarget, startProjectUC usecase.StartProject, listLibraryUC usecase.ListLibrary, updateAppUC usecase.UpdateApp) App {
 	return App{
 		in:                 in,
 		out:                out,
@@ -54,13 +57,14 @@ func NewAppWithUseCases(in io.Reader, out io.Writer, installAssistantUC usecase.
 		initTargetUC:       initTargetUC,
 		startProjectUC:     startProjectUC,
 		listLibraryUC:      listLibraryUC,
+		updateAppUC:        updateAppUC,
 	}
 }
 
 func (a App) Run(args []string) int {
 	if len(args) == 0 {
 		fmt.Fprintln(a.out, "usage: heimdall <command> [args]")
-		fmt.Fprintln(a.out, "commands: init, start, list-lib, install")
+		fmt.Fprintln(a.out, "commands: init, start, list-lib, install, update-app")
 		return 1
 	}
 
@@ -73,9 +77,11 @@ func (a App) Run(args []string) int {
 		return a.runListLibrary(args)
 	case "install":
 		return a.runInstall(args)
+	case "update-app":
+		return a.runUpdateApp(args)
 	default:
 		fmt.Fprintf(a.out, "error: unsupported command %q\n", args[0])
-		fmt.Fprintln(a.out, "commands: init, start, list-lib, install")
+		fmt.Fprintln(a.out, "commands: init, start, list-lib, install, update-app")
 		return 1
 	}
 }
@@ -234,4 +240,41 @@ func printInstallDetails(out io.Writer, label string, items []string) {
 	for _, item := range items {
 		fmt.Fprintf(out, "%s: %s\n", label, item)
 	}
+}
+
+func (a App) runUpdateApp(args []string) int {
+	parsed, err := ParseUpdateAppArgs(args)
+	if err != nil {
+		fmt.Fprintf(a.out, "error: %v\n", err)
+		fmt.Fprintln(a.out, "usage: heimdall update-app [codex|antigravity|claude|cursor] [--output <dir>]")
+		return 1
+	}
+
+	result, err := a.updateAppUC.Execute(context.Background(), parsed.Request)
+	if err != nil {
+		fmt.Fprintf(a.out, "error: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(
+		a.out,
+		"update-app completed: removed=%d installed=%d skipped=%d failed=%d warnings=%d\n",
+		len(result.Removed),
+		len(result.Installed),
+		len(result.Skipped),
+		len(result.Failed),
+		len(result.Warnings),
+	)
+
+	printInstallDetails(a.out, "removed", result.Removed)
+	printInstallDetails(a.out, "installed", result.Installed)
+	printInstallDetails(a.out, "skipped", result.Skipped)
+	printInstallDetails(a.out, "failed", result.Failed)
+	printInstallDetails(a.out, "warning", result.Warnings)
+
+	if len(result.Failed) > 0 {
+		return 1
+	}
+
+	return 0
 }

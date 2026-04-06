@@ -370,3 +370,71 @@ func TestFilesystemGatewayInstallSkillsMaterializesSkillMarkdownFromContract(t *
 		t.Fatalf("expected generated SKILL.md instructions, got %s", text)
 	}
 }
+
+func TestFilesystemGatewayUpdateAppRefreshesPlatformSkills(t *testing.T) {
+	t.Parallel()
+
+	templateRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(templateRoot, "tools"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(templateRoot, "AGENTS.md"), []byte("agents-template"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	currentPlatformTool := `type: skill
+categories:
+  - platform
+name: heimdall-install
+description: Install helper.
+instructions: |
+  execute install helper`
+	if err := os.WriteFile(filepath.Join(templateRoot, "tools", "heimdall-install.yaml"), []byte(currentPlatformTool), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	outputDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(outputDir, ".codex", "skills", "heimdall-old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outputDir, ".codex", "skills", "heimdall-old", "SKILL.md"), []byte("legacy"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(outputDir, ".heimdall", "template", "tools"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	previousPlatformTool := `type: skill
+categories:
+  - platform
+name: heimdall-old
+description: Old helper.
+instructions: |
+  legacy helper`
+	if err := os.WriteFile(filepath.Join(outputDir, ".heimdall", "template", "tools", "heimdall-old.yaml"), []byte(previousPlatformTool), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	gateway := infrainstall.NewFilesystemGateway(filepath.Join(templateRoot, "AGENTS.md"))
+	result, err := gateway.UpdateApp(context.Background(), usecase.UpdateAppRequest{
+		Target:    domain.TargetCodex,
+		OutputDir: outputDir,
+	})
+	if err != nil {
+		t.Fatalf("expected update-app to succeed, got %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(outputDir, ".codex", "skills", "heimdall-old")); err == nil {
+		t.Fatal("expected legacy platform skill to be removed")
+	}
+	if _, err := os.Stat(filepath.Join(outputDir, ".codex", "skills", "heimdall-install", "SKILL.md")); err != nil {
+		t.Fatalf("expected current platform skill to be installed, got %v", err)
+	}
+
+	if len(result.Removed) == 0 {
+		t.Fatalf("expected removed entries, got %#v", result)
+	}
+	if len(result.Installed) == 0 {
+		t.Fatalf("expected installed entries, got %#v", result)
+	}
+}

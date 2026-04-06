@@ -36,7 +36,7 @@ Interface de uso para usuário final:
 - terminal: `heimdall init <target>`
 - chat com Agente de IA: execução das tools de plataforma
 
-Comandos como `start`, `list-lib` e `install` continuam existindo na CLI, mas no fluxo recomendado eles são acionados pelo Agente de IA através das tools de plataforma.
+Comandos como `start`, `list-lib`, `install` e `update-app` continuam existindo na CLI, mas no fluxo recomendado eles são acionados pelo Agente de IA através das tools de plataforma.
 
 ## Estrutura do projeto
 
@@ -228,6 +228,7 @@ Entrega 1 do MVP está funcional:
 - `start`
 - `list-lib`
 - `install`
+- `update-app`
 
 Próximo ciclo natural:
 

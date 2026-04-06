@@ -91,3 +91,20 @@ type ListLibraryResult struct {
 type ListLibrary interface {
 	Execute(ctx context.Context, request ListLibraryRequest) (ListLibraryResult, error)
 }
+
+type UpdateAppRequest struct {
+	Target    domain.TargetPlatform
+	OutputDir string
+}
+
+type UpdateAppResult struct {
+	Removed   []string
+	Installed []string
+	Skipped   []string
+	Failed    []string
+	Warnings  []string
+}
+
+type UpdateApp interface {
+	Execute(ctx context.Context, request UpdateAppRequest) (UpdateAppResult, error)
+}
