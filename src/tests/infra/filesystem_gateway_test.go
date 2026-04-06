@@ -70,6 +70,126 @@ func TestFilesystemGatewayInstallSkillsAndAgentsPolicy(t *testing.T) {
 	}
 }
 
+func TestFilesystemGatewayApplyAgentsPolicyRendersAgentsTemplateWithProjectContext(t *testing.T) {
+	t.Parallel()
+
+	sourceRoot := t.TempDir()
+	agentsTemplate := filepath.Join(sourceRoot, "AGENTS.md")
+	templateContent := strings.Join([]string{
+		"title={{PROJECT_TITLE}}",
+		"description={{PROJECT_DESCRIPTION}}",
+		"target={{TARGET_PLATFORM}}",
+		"root={{PROJECT_ROOT}}",
+		"docs:",
+		"{{PROJECT_DOCS_SUMMARY}}",
+		"persona={{SQUAD_PERSONA}}",
+	}, "\n")
+	if err := os.WriteFile(agentsTemplate, []byte(templateContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	outputDir := t.TempDir()
+	gateway := infrainstall.NewFilesystemGateway()
+	_, err := gateway.SaveProjectContext(context.Background(), usecase.StartRequest{
+		Target:        domain.TargetCodex,
+		Title:         "Heimdall Commerce",
+		Description:   "Squad para operacao comercial e melhoria de funil.",
+		Documentation: []string{"playbook-vendas.md", "metas-q2.md", "dados-pipeline.csv", "faq-comercial.md"},
+		OutputDir:     outputDir,
+	})
+	if err != nil {
+		t.Fatalf("expected save project context to succeed, got %v", err)
+	}
+
+	result, err := gateway.ApplyAgentsPolicy(context.Background(), usecase.InstallRequest{
+		Target:       domain.TargetCodex,
+		OutputDir:    outputDir,
+		AgentsPolicy: domain.AgentsPolicyOverwrite,
+	}, agentsTemplate)
+	if err != nil {
+		t.Fatalf("expected agents policy to succeed, got %v", err)
+	}
+	if len(result.Installed) != 1 {
+		t.Fatalf("expected agents to be installed, got %#v", result)
+	}
+
+	content, err := os.ReadFile(filepath.Join(outputDir, "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("expected generated AGENTS.md to exist, got %v", err)
+	}
+
+	text := string(content)
+	for _, fragment := range []string{
+		"title=Heimdall Commerce",
+		"description=Squad para operacao comercial e melhoria de funil.",
+		"target=codex",
+		"root=" + outputDir,
+		"- playbook-vendas.md",
+		"- metas-q2.md",
+		"- dados-pipeline.csv",
+		"- ... e mais 1 fonte(s) de contexto.",
+		"persona=Lideranca de operacao comercial orientada a processo, clareza de funil e melhoria continua por dados.",
+	} {
+		if !strings.Contains(text, fragment) {
+			t.Fatalf("expected rendered AGENTS.md to contain %q, got %s", fragment, text)
+		}
+	}
+
+	if strings.Contains(text, "{{PROJECT_TITLE}}") {
+		t.Fatalf("expected placeholders to be rendered, got %s", text)
+	}
+}
+
+func TestFilesystemGatewayApplyAgentsPolicyRendersFallbackWhenContextIsMissing(t *testing.T) {
+	t.Parallel()
+
+	sourceRoot := t.TempDir()
+	agentsTemplate := filepath.Join(sourceRoot, "AGENTS.md")
+	templateContent := strings.Join([]string{
+		"title={{PROJECT_TITLE}}",
+		"description={{PROJECT_DESCRIPTION}}",
+		"target={{TARGET_PLATFORM}}",
+		"root={{PROJECT_ROOT}}",
+		"docs:",
+		"{{PROJECT_DOCS_SUMMARY}}",
+		"persona={{SQUAD_PERSONA}}",
+	}, "\n")
+	if err := os.WriteFile(agentsTemplate, []byte(templateContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	outputDir := t.TempDir()
+	gateway := infrainstall.NewFilesystemGateway()
+
+	_, err := gateway.ApplyAgentsPolicy(context.Background(), usecase.InstallRequest{
+		Target:       domain.TargetCodex,
+		OutputDir:    outputDir,
+		AgentsPolicy: domain.AgentsPolicyOverwrite,
+	}, agentsTemplate)
+	if err != nil {
+		t.Fatalf("expected agents policy to succeed without project context, got %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(outputDir, "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("expected generated AGENTS.md to exist, got %v", err)
+	}
+
+	text := string(content)
+	for _, fragment := range []string{
+		"title=Projeto sem titulo informado",
+		"description=Contexto de negocio nao informado no heimdall start.",
+		"target=nao-definido",
+		"root=" + outputDir,
+		"- Nenhuma documentacao registrada no heimdall start.",
+		"persona=Lideranca de squad multidisciplinar orientada a problema, com fronteiras claras de responsabilidade e colaboracao entre especialistas.",
+	} {
+		if !strings.Contains(text, fragment) {
+			t.Fatalf("expected fallback AGENTS.md to contain %q, got %s", fragment, text)
+		}
+	}
+}
+
 func TestFilesystemGatewayInitTarget(t *testing.T) {
 	t.Parallel()
 
@@ -92,8 +212,8 @@ func TestFilesystemGatewayInitTarget(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(outputDir, ".claude", "skills")); err != nil {
 		t.Fatalf("expected .claude/skills to exist, got %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(outputDir, ".claude", "assistants")); err != nil {
-		t.Fatalf("expected .claude/assistants to exist, got %v", err)
+	if _, err := os.Stat(filepath.Join(outputDir, ".claude", "assistants")); err == nil {
+		t.Fatal("expected .claude/assistants to not be created")
 	}
 
 	manifestPath := filepath.Join(outputDir, ".heimdall", "context", "project-context.yaml")
@@ -305,8 +425,8 @@ func TestFilesystemGatewayInstallAssistantsCreatesCodexWrapper(t *testing.T) {
 		t.Fatalf("expected install assistants to succeed, got %v", err)
 	}
 
-	if len(result.Installed) < 2 {
-		t.Fatalf("expected assistant and wrapper installed, got %#v", result.Installed)
+	if len(result.Installed) != 1 || result.Installed[0] != "assistant:write-tech-article" {
+		t.Fatalf("expected assistant wrapper install result, got %#v", result.Installed)
 	}
 
 	wrapperPath := filepath.Join(outputDir, ".codex", "skills", "assistant-write-tech-article", "SKILL.md")

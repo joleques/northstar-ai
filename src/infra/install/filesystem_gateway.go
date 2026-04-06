@@ -147,7 +147,7 @@ func (g FilesystemGateway) InitTarget(ctx context.Context, request usecase.InitR
 		Warnings: make([]string, 0),
 	}
 
-	for _, dir := range []string{layout.SkillsDir, layout.AssistantsDir} {
+	for _, dir := range []string{layout.SkillsDir} {
 		created, err := createDirWithIdempotency(dir, request.Force)
 		if err != nil {
 			return usecase.InitResult{}, err
@@ -828,7 +828,7 @@ func removeManagedSkillsFromDisk(layout targetLayout, skillNames []string) ([]st
 	return removed, warnings
 }
 
-func removeManagedAssistantsFromDisk(layout targetLayout, target domain.TargetPlatform, assistantIDs []string) ([]string, []string) {
+func removeManagedAssistantsFromDisk(layout targetLayout, _ domain.TargetPlatform, assistantIDs []string) ([]string, []string) {
 	removed := make([]string, 0, len(assistantIDs))
 	warnings := make([]string, 0)
 
@@ -856,14 +856,13 @@ func removeManagedAssistantsFromDisk(layout targetLayout, target domain.TargetPl
 			removedAssistant = true
 		}
 
-		if target == domain.TargetCodex {
-			wrapperPath := filepath.Join(layout.SkillsDir, "assistant-"+normalized)
-			if _, err := os.Stat(wrapperPath); err == nil {
-				if removeErr := os.RemoveAll(wrapperPath); removeErr != nil {
-					warnings = append(warnings, fmt.Sprintf("remove managed assistant wrapper %q: %v", wrapperPath, removeErr))
-				} else {
-					removed = append(removed, "assistant-wrapper:"+normalized)
-				}
+		wrapperPath := filepath.Join(layout.SkillsDir, "assistant-"+normalized)
+		if _, err := os.Stat(wrapperPath); err == nil {
+			if removeErr := os.RemoveAll(wrapperPath); removeErr != nil {
+				warnings = append(warnings, fmt.Sprintf("remove managed assistant wrapper %q: %v", wrapperPath, removeErr))
+			} else {
+				removed = append(removed, "assistant-wrapper:"+normalized)
+				removedAssistant = true
 			}
 		}
 
@@ -935,46 +934,30 @@ func (g FilesystemGateway) InstallAssistants(_ context.Context, request usecase.
 		return usecase.InstallResult{}, err
 	}
 
-	if err := os.MkdirAll(layout.AssistantsDir, 0o755); err != nil {
-		return usecase.InstallResult{}, fmt.Errorf("create assistants dir: %w", err)
+	if err := os.MkdirAll(layout.SkillsDir, 0o755); err != nil {
+		return usecase.InstallResult{}, fmt.Errorf("create skills dir for assistants: %w", err)
 	}
 
 	result := usecase.InstallResult{}
 	managedInstalled := make([]string, 0, len(assistants))
 	for _, assistant := range assistants {
-		ext := filepath.Ext(assistant.SourcePath)
-		if ext == "" {
-			ext = ".yaml"
-		}
-		dest := filepath.Join(layout.AssistantsDir, assistant.ID+ext)
-
-		copied, err := copyFileWithIdempotency(assistant.SourcePath, dest, request.Force)
-		if err != nil {
-			result.Failed = append(result.Failed, "assistant:"+assistant.ID)
-			result.Warnings = append(result.Warnings, err.Error())
+		if request.SkipWrappers {
+			result.Skipped = append(result.Skipped, "assistant:"+assistant.ID)
 			continue
 		}
 
-		if copied {
+		wrapperOutput, wrapperErr := installAssistantWrapper(layout, request.Force, assistant)
+		if wrapperErr != nil {
+			result.Failed = append(result.Failed, "assistant:"+assistant.ID)
+			result.Warnings = append(result.Warnings, wrapperErr.Error())
+			continue
+		}
+
+		if wrapperOutput.Created {
 			result.Installed = append(result.Installed, "assistant:"+assistant.ID)
 			managedInstalled = append(managedInstalled, assistant.ID)
 		} else {
 			result.Skipped = append(result.Skipped, "assistant:"+assistant.ID)
-		}
-
-		if request.Target == domain.TargetCodex && !request.SkipWrappers {
-			wrapperOutput, wrapperErr := installCodexAssistantWrapper(layout, request.Force, assistant)
-			if wrapperErr != nil {
-				result.Failed = append(result.Failed, "assistant-wrapper:"+assistant.ID)
-				result.Warnings = append(result.Warnings, wrapperErr.Error())
-				continue
-			}
-
-			if wrapperOutput.Created {
-				result.Installed = append(result.Installed, "assistant-wrapper:"+assistant.ID)
-			} else {
-				result.Skipped = append(result.Skipped, "assistant-wrapper:"+assistant.ID)
-			}
 		}
 	}
 
@@ -985,7 +968,7 @@ func (g FilesystemGateway) InstallAssistants(_ context.Context, request usecase.
 	return result, nil
 }
 
-func (g FilesystemGateway) ApplyAgentsPolicy(_ context.Context, request usecase.InstallRequest, templateAgentsPath string) (usecase.InstallResult, error) {
+func (g FilesystemGateway) ApplyAgentsPolicy(ctx context.Context, request usecase.InstallRequest, templateAgentsPath string) (usecase.InstallResult, error) {
 	result := usecase.InstallResult{}
 	if templateAgentsPath == "" {
 		result.Skipped = append(result.Skipped, "agents:template-missing")
@@ -1016,18 +999,122 @@ func (g FilesystemGateway) ApplyAgentsPolicy(_ context.Context, request usecase.
 		return usecase.InstallResult{}, fmt.Errorf("invalid agents policy: %q", request.AgentsPolicy)
 	}
 
-	copied, err := copyFileWithIdempotency(templateAgentsPath, destination, true)
+	renderedContent, err := g.renderAgentsTemplate(ctx, request.OutputDir, templateAgentsPath)
 	if err != nil {
 		return usecase.InstallResult{}, err
 	}
 
-	if copied {
+	output, err := writeFileWithOverwrite(destination, renderedContent)
+	if err != nil {
+		return usecase.InstallResult{}, err
+	}
+
+	if output.Created {
 		result.Installed = append(result.Installed, "agents")
 	} else {
 		result.Skipped = append(result.Skipped, "agents")
 	}
 
 	return result, nil
+}
+
+func (g FilesystemGateway) renderAgentsTemplate(ctx context.Context, outputDir, templateAgentsPath string) ([]byte, error) {
+	templateContent, err := os.ReadFile(templateAgentsPath)
+	if err != nil {
+		return nil, fmt.Errorf("read AGENTS template: %w", err)
+	}
+
+	projectContext := domain.ProjectContext{
+		ProjectRoot: resolveProjectRoot(outputDir),
+	}
+
+	manifestPath := resolveProjectContextLayout(outputDir).ManifestPath
+	if _, err := os.Stat(manifestPath); err == nil {
+		loadedContext, loadErr := g.LoadProjectContext(ctx, outputDir)
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		projectContext = loadedContext
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("stat project context manifest: %w", err)
+	}
+
+	rendered := applyAgentsTemplateContext(string(templateContent), projectContext)
+	return []byte(rendered), nil
+}
+
+func applyAgentsTemplateContext(templateContent string, projectContext domain.ProjectContext) string {
+	title := fallbackValue(projectContext.Title, "Projeto sem titulo informado")
+	description := fallbackValue(projectContext.Description, "Contexto de negocio nao informado no heimdall start.")
+	target := fallbackValue(string(projectContext.Target), "nao-definido")
+	projectRoot := fallbackValue(projectContext.ProjectRoot, ".")
+	documentsSummary := summarizeDocumentation(projectContext.Documentation)
+	persona := buildSquadPersona(projectContext)
+
+	replacements := map[string]string{
+		"{{PROJECT_TITLE}}":        title,
+		"{{PROJECT_DESCRIPTION}}":  description,
+		"{{TARGET_PLATFORM}}":      target,
+		"{{PROJECT_ROOT}}":         projectRoot,
+		"{{PROJECT_DOCS_SUMMARY}}": documentsSummary,
+		"{{SQUAD_PERSONA}}":        persona,
+	}
+
+	rendered := templateContent
+	for marker, replacement := range replacements {
+		rendered = strings.ReplaceAll(rendered, marker, replacement)
+	}
+	return rendered
+}
+
+func summarizeDocumentation(documents []string) string {
+	if len(documents) == 0 {
+		return "- Nenhuma documentacao registrada no heimdall start."
+	}
+
+	limit := len(documents)
+	if limit > 3 {
+		limit = 3
+	}
+
+	lines := make([]string, 0, limit+1)
+	for i := 0; i < limit; i++ {
+		lines = append(lines, "- "+strings.TrimSpace(documents[i]))
+	}
+	if len(documents) > limit {
+		lines = append(lines, fmt.Sprintf("- ... e mais %d fonte(s) de contexto.", len(documents)-limit))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func buildSquadPersona(projectContext domain.ProjectContext) string {
+	text := strings.ToLower(strings.TrimSpace(strings.Join([]string{
+		projectContext.Title,
+		projectContext.Description,
+		strings.Join(projectContext.Documentation, " "),
+	}, " ")))
+
+	switch {
+	case strings.Contains(text, "api"), strings.Contains(text, "backend"), strings.Contains(text, "microservice"), strings.Contains(text, "software"):
+		return "Lideranca tecnica de engenharia orientada a produto, com foco em arquitetura evolutiva e entregas incrementais."
+	case strings.Contains(text, "instagram"), strings.Contains(text, "linkedin"), strings.Contains(text, "conteudo"), strings.Contains(text, "marketing"):
+		return "Lideranca de squad de conteudo orientada a estrategia, distribuicao e aprendizado continuo por metricas."
+	case strings.Contains(text, "vendas"), strings.Contains(text, "comercial"), strings.Contains(text, "crm"), strings.Contains(text, "pipeline"):
+		return "Lideranca de operacao comercial orientada a processo, clareza de funil e melhoria continua por dados."
+	case strings.Contains(text, "produto"), strings.Contains(text, "discovery"), strings.Contains(text, "roadmap"), strings.Contains(text, "pesquisa"):
+		return "Lideranca de produto orientada a descoberta, priorizacao baseada em impacto e validacao de hipoteses."
+	default:
+		return "Lideranca de squad multidisciplinar orientada a problema, com fronteiras claras de responsabilidade e colaboracao entre especialistas."
+	}
+}
+
+func fallbackValue(value, fallback string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fallback
+	}
+	return trimmed
 }
 
 type targetLayout struct {
@@ -1448,13 +1535,13 @@ func (g FilesystemGateway) copyTemplateSnapshot(outputDir string, force bool) (f
 	return fileWriteOutput{Path: heimdall.TemplateDir, Created: created}, nil
 }
 
-func installCodexAssistantWrapper(layout targetLayout, force bool, assistant usecase.AssistantAsset) (fileWriteOutput, error) {
+func installAssistantWrapper(layout targetLayout, force bool, assistant usecase.AssistantAsset) (fileWriteOutput, error) {
 	wrapperName := "assistant-" + assistant.ID
 	wrapperPath := filepath.Join(layout.SkillsDir, wrapperName, "SKILL.md")
-	content := []byte(buildCodexAssistantSkillMarkdown(assistant))
+	content := []byte(buildAssistantSkillMarkdown(assistant))
 	output, err := writeFileWithIdempotency(wrapperPath, content, force)
 	if err != nil {
-		return fileWriteOutput{}, fmt.Errorf("create codex assistant wrapper for %q: %w", assistant.ID, err)
+		return fileWriteOutput{}, fmt.Errorf("create assistant wrapper for %q: %w", assistant.ID, err)
 	}
 	return output, nil
 }
@@ -1543,7 +1630,7 @@ func buildSkillMarkdownFromContract(skill usecase.SkillAsset) string {
 	return builder.String()
 }
 
-func buildCodexAssistantSkillMarkdown(assistant usecase.AssistantAsset) string {
+func buildAssistantSkillMarkdown(assistant usecase.AssistantAsset) string {
 	name := strings.TrimSpace(assistant.Name)
 	if name == "" {
 		name = assistant.ID
@@ -1568,11 +1655,11 @@ func buildCodexAssistantSkillMarkdown(assistant usecase.AssistantAsset) string {
 	builder.WriteString(description)
 	builder.WriteString("\n")
 	builder.WriteString("---\n\n")
-	builder.WriteString("# Assistant Wrapper\n\n")
-	builder.WriteString("Use this skill to execute assistant `")
+	builder.WriteString("# Orchestrator Wrapper\n\n")
+	builder.WriteString("Use this skill to execute orchestrator `")
 	builder.WriteString(assistant.ID)
 	builder.WriteString("`.\n\n")
-	builder.WriteString("## Workflow Instructions\n\n")
+	builder.WriteString("## Orchestration Instructions\n\n")
 	builder.WriteString(instructions)
 	builder.WriteString("\n\n")
 
