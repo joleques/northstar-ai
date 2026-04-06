@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	infrainstall "github.com/heimdall-app/heimdall/src/infra/install"
-	infratemplate "github.com/heimdall-app/heimdall/src/infra/template"
-	usecase "github.com/heimdall-app/heimdall/src/use_case"
+	infrainstall "github.com/joleques/northstar-ai/src/infra/install"
+	infratemplate "github.com/joleques/northstar-ai/src/infra/template"
+	usecase "github.com/joleques/northstar-ai/src/use_case"
 )
 
 type App struct {

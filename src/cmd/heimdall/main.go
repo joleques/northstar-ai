@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/heimdall-app/heimdall/src/application"
+	"github.com/joleques/northstar-ai/src/application"
 )
 
 func main() {

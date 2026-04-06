@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/heimdall-app/heimdall/src/application"
+	"github.com/joleques/northstar-ai/src/application"
 )
 
 func TestParseStartArgs(t *testing.T) {

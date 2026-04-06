@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/heimdall-app/heimdall/src/domain"
+	"github.com/joleques/northstar-ai/src/domain"
 )
 
 type SkillAsset struct {

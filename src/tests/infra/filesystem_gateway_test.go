@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/heimdall-app/heimdall/src/domain"
-	infrainstall "github.com/heimdall-app/heimdall/src/infra/install"
-	usecase "github.com/heimdall-app/heimdall/src/use_case"
+	"github.com/joleques/northstar-ai/src/domain"
+	infrainstall "github.com/joleques/northstar-ai/src/infra/install"
+	usecase "github.com/joleques/northstar-ai/src/use_case"
 )
 
 func TestFilesystemGatewayInstallSkillsAndAgentsPolicy(t *testing.T) {

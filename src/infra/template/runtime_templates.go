@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	projecttemplates "github.com/heimdall-app/heimdall/src/templates"
+	projecttemplates "github.com/joleques/northstar-ai/src/templates"
 )
 
 func ResolveTemplateRoot() (string, error) {

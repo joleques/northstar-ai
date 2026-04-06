@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/heimdall-app/heimdall/src/domain"
+	"github.com/joleques/northstar-ai/src/domain"
 )
 
 func TestAssistantSpecValidateSuccess(t *testing.T) {

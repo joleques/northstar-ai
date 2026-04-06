@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	infratemplate "github.com/heimdall-app/heimdall/src/infra/template"
+	infratemplate "github.com/joleques/northstar-ai/src/infra/template"
 )
 
 func TestTemplateCatalogGatewayLoad(t *testing.T) {

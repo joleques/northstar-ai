@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	infrainstall "github.com/heimdall-app/heimdall/src/infra/install"
-	usecase "github.com/heimdall-app/heimdall/src/use_case"
+	infrainstall "github.com/joleques/northstar-ai/src/infra/install"
+	usecase "github.com/joleques/northstar-ai/src/use_case"
 )
 
 func TestFilesystemGatewaySaveProjectContext(t *testing.T) {

@@ -1,4 +1,4 @@
-module github.com/heimdall-app/heimdall
+module github.com/joleques/northstar-ai
 
 go 1.25.0
 

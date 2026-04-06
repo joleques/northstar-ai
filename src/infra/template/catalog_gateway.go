@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/heimdall-app/heimdall/src/domain"
-	usecase "github.com/heimdall-app/heimdall/src/use_case"
+	"github.com/joleques/northstar-ai/src/domain"
+	usecase "github.com/joleques/northstar-ai/src/use_case"
 	"gopkg.in/yaml.v3"
 )
 

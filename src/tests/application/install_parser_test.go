@@ -4,8 +4,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/heimdall-app/heimdall/src/application"
-	"github.com/heimdall-app/heimdall/src/domain"
+	"github.com/joleques/northstar-ai/src/application"
+	"github.com/joleques/northstar-ai/src/domain"
 )
 
 func TestParseCLIArgs(t *testing.T) {

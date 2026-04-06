@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	usecase "github.com/heimdall-app/heimdall/src/use_case"
+	usecase "github.com/joleques/northstar-ai/src/use_case"
 )
 
 func TestListLibraryUseCaseExecute(t *testing.T) {
