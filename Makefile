@@ -21,5 +21,8 @@ build-release:
 	GOOS=darwin GOARCH=amd64 go build -o $(RELEASE_DIR)/$(VERSIONED_NAME)-darwin-amd64 $(ENTRYPOINT)
 	GOOS=darwin GOARCH=arm64 go build -o $(RELEASE_DIR)/$(VERSIONED_NAME)-darwin-arm64 $(ENTRYPOINT)
 
+build-local:
+	go build -o northstar ./src/cmd/northstar
+
 clean:
 	rm -rf $(DIST_DIR)

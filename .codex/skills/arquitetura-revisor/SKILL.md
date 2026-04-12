@@ -28,6 +28,14 @@ Pergunte ao usuário:
 1. **Diretório raiz do projeto** a ser analisado
 2. **Linguagem principal** (Go, Java, Python, etc.)
 
+Colete também o contexto minimo da entrega:
+3. **Tipo da demanda** (`bug`, `melhoria`, `evolucao` ou `nova funcionalidade`)
+4. **Arquivos alterados**
+5. **Testes executados e resultado**
+6. **Arquivos de teste criados, alterados ou removidos**
+
+Se houve implementacao sem evidencia minima de testes, sinalize isso no relatorio como risco de qualidade do fluxo.
+
 ### 2. Análise de Estrutura de Pastas
 
 Verifique se o projeto segue a estrutura esperada:
@@ -180,6 +188,13 @@ Gere um relatório Markdown com:
 ## Recomendações Gerais
 
 [Lista de melhorias sugeridas]
+
+## Verificações de Fluxo
+
+- **Tipo da demanda:** [tipo]
+- **Testes executados:** [sim/não + evidência]
+- **Alterações em testes:** [arquivos]
+- **Risco de processo:** [nenhum / atenção / crítico]
 ```
 
 ---
@@ -189,6 +204,7 @@ Gere um relatório Markdown com:
 - Esta análise é baseada em inspeção de código e estrutura
 - Alguns problemas podem requerer análise de contexto adicional
 - Priorize problemas que violam regras fundamentais (dependências)
+- Se a solução arquitetural vier sem proteção automatizada ou com remoção suspeita de testes, registre isso mesmo que a estrutura de camadas esteja aceitável.
 
 ---
 

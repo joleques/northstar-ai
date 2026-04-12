@@ -226,11 +226,6 @@ func (g FilesystemGateway) UpdateApp(ctx context.Context, request usecase.Update
 		return usecase.UpdateAppResult{}, fmt.Errorf("template source unavailable for update-app")
 	}
 
-	currentCatalog, err := g.loadTemplateCatalogFromToolsDir(filepath.Join(sourceDir, "tools"))
-	if err != nil {
-		return usecase.UpdateAppResult{}, err
-	}
-
 	currentPlatformTools, err := g.loadPlatformToolsFromToolsDir(filepath.Join(sourceDir, "tools"))
 	if err != nil {
 		return usecase.UpdateAppResult{}, err
@@ -242,11 +237,6 @@ func (g FilesystemGateway) UpdateApp(ctx context.Context, request usecase.Update
 		return usecase.UpdateAppResult{}, err
 	}
 	previousPlatformSkills := platformToolsToSkillAssets(previousPlatformTools)
-
-	state, err := loadManagedToolsState(request.OutputDir)
-	if err != nil {
-		return usecase.UpdateAppResult{}, err
-	}
 
 	result := usecase.UpdateAppResult{
 		Removed:   []string{},
@@ -286,36 +276,12 @@ func (g FilesystemGateway) UpdateApp(ctx context.Context, request usecase.Update
 		result.Removed = append(result.Removed, "skill:"+skillName)
 	}
 
-	templateToolsResult, err := g.refreshPlatformToolsSnapshot(request.OutputDir, currentPlatformTools, previousPlatformTools)
+	templateOutput, err := g.syncTemplateSnapshot(request.OutputDir)
 	if err != nil {
 		return usecase.UpdateAppResult{}, err
 	}
-	result.Removed = append(result.Removed, templateToolsResult.Removed...)
-	result.Installed = append(result.Installed, templateToolsResult.Installed...)
-	result.Failed = append(result.Failed, templateToolsResult.Failed...)
-	result.Warnings = append(result.Warnings, templateToolsResult.Warnings...)
-
-	managedSkillNames := make(map[string]struct{}, len(state.Skills)+len(currentPlatformSkills))
-	for _, skill := range state.Skills {
-		normalized := strings.TrimSpace(skill)
-		if normalized != "" {
-			managedSkillNames[normalized] = struct{}{}
-		}
-	}
-	for _, skill := range currentPlatformSkills {
-		if skill.Name != "" {
-			managedSkillNames[skill.Name] = struct{}{}
-		}
-	}
-
-	skillsToInstall := make([]usecase.SkillAsset, 0, len(managedSkillNames))
-	missingManagedSkills := make([]string, 0)
-	for skillName := range managedSkillNames {
-		if skill, exists := currentCatalog.SkillsByName[skillName]; exists {
-			skillsToInstall = append(skillsToInstall, skill)
-		} else {
-			missingManagedSkills = append(missingManagedSkills, skillName)
-		}
+	if templateOutput.Path != "" {
+		result.Installed = append(result.Installed, templateOutput.Path)
 	}
 
 	skillsResult, err := g.InstallSkills(ctx, usecase.InstallRequest{
@@ -323,31 +289,7 @@ func (g FilesystemGateway) UpdateApp(ctx context.Context, request usecase.Update
 		Force:        true,
 		OutputDir:    request.OutputDir,
 		SkipWrappers: true,
-	}, skillsToInstall)
-	if err != nil {
-		return usecase.UpdateAppResult{}, err
-	}
-
-	managedAssistants := make([]usecase.AssistantAsset, 0, len(state.Assistants))
-	missingManagedAssistants := make([]string, 0)
-	for _, assistantID := range state.Assistants {
-		normalized := strings.TrimSpace(assistantID)
-		if normalized == "" {
-			continue
-		}
-
-		if assistant, exists := currentCatalog.AssistantsByID[normalized]; exists {
-			managedAssistants = append(managedAssistants, assistant)
-		} else {
-			missingManagedAssistants = append(missingManagedAssistants, normalized)
-		}
-	}
-
-	assistantsResult, err := g.InstallAssistants(ctx, usecase.InstallRequest{
-		Target:    request.Target,
-		Force:     true,
-		OutputDir: request.OutputDir,
-	}, managedAssistants)
+	}, currentPlatformSkills)
 	if err != nil {
 		return usecase.UpdateAppResult{}, err
 	}
@@ -356,23 +298,6 @@ func (g FilesystemGateway) UpdateApp(ctx context.Context, request usecase.Update
 	result.Skipped = append(result.Skipped, skillsResult.Skipped...)
 	result.Failed = append(result.Failed, skillsResult.Failed...)
 	result.Warnings = append(result.Warnings, skillsResult.Warnings...)
-
-	result.Installed = append(result.Installed, assistantsResult.Installed...)
-	result.Skipped = append(result.Skipped, assistantsResult.Skipped...)
-	result.Failed = append(result.Failed, assistantsResult.Failed...)
-	result.Warnings = append(result.Warnings, assistantsResult.Warnings...)
-
-	removedSkills, removedSkillWarnings := removeManagedSkillsFromDisk(layout, missingManagedSkills)
-	result.Removed = append(result.Removed, removedSkills...)
-	result.Warnings = append(result.Warnings, removedSkillWarnings...)
-
-	removedAssistants, removedAssistantWarnings := removeManagedAssistantsFromDisk(layout, request.Target, missingManagedAssistants)
-	result.Removed = append(result.Removed, removedAssistants...)
-	result.Warnings = append(result.Warnings, removedAssistantWarnings...)
-
-	if err := removeManagedTools(request.OutputDir, missingManagedSkills, missingManagedAssistants); err != nil {
-		return usecase.UpdateAppResult{}, err
-	}
 
 	return result, nil
 }
@@ -644,7 +569,7 @@ func (g FilesystemGateway) loadTemplateCatalogFromToolsDir(toolsDir string) (tem
 			}
 
 			catalog.SkillsByName[skillName] = usecase.SkillAsset{
-				Name: skillName,
+				Name:      skillName,
 				SourceDir: resolveTemplateToolAssetsDir(toolsDir, entry.Name(), skillName),
 				Contract: &usecase.SkillContract{
 					Name:         skillName,
@@ -1387,6 +1312,45 @@ func copyDirWithIdempotency(sourceDir, destinationDir string, force bool) (bool,
 	return created, nil
 }
 
+func syncDirWithOverwrite(sourceDir, destinationDir string) (bool, error) {
+	created := false
+	if _, err := os.Stat(destinationDir); err == nil {
+		created = false
+	} else if os.IsNotExist(err) {
+		created = true
+	} else {
+		return false, fmt.Errorf("stat destination dir %q: %w", destinationDir, err)
+	}
+
+	if err := os.MkdirAll(destinationDir, 0o755); err != nil {
+		return false, fmt.Errorf("create destination dir %q: %w", destinationDir, err)
+	}
+
+	err := filepath.WalkDir(sourceDir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+
+		relativePath, err := filepath.Rel(sourceDir, path)
+		if err != nil {
+			return err
+		}
+
+		destinationPath := filepath.Join(destinationDir, relativePath)
+		if d.IsDir() {
+			return os.MkdirAll(destinationPath, 0o755)
+		}
+
+		_, err = copyFileWithIdempotency(path, destinationPath, true)
+		return err
+	})
+	if err != nil {
+		return false, fmt.Errorf("sync directory %q to %q: %w", sourceDir, destinationDir, err)
+	}
+
+	return created, nil
+}
+
 func appendFileOutcome(result *usecase.StartResult, output fileWriteOutput) {
 	if output.Created {
 		result.Created = append(result.Created, output.Path)
@@ -1554,6 +1518,21 @@ func (g FilesystemGateway) copyTemplateSnapshot(outputDir string, force bool) (f
 	created, err := copyDirWithIdempotency(sourceDir, northstar.TemplateDir, force)
 	if err != nil {
 		return fileWriteOutput{}, fmt.Errorf("copy template snapshot to %q: %w", northstar.TemplateDir, err)
+	}
+
+	return fileWriteOutput{Path: northstar.TemplateDir, Created: created}, nil
+}
+
+func (g FilesystemGateway) syncTemplateSnapshot(outputDir string) (fileWriteOutput, error) {
+	sourceDir := strings.TrimSpace(g.templateSourceDir)
+	if sourceDir == "" {
+		return fileWriteOutput{}, nil
+	}
+
+	northstar := resolveNorthstarLayout(outputDir)
+	created, err := syncDirWithOverwrite(sourceDir, northstar.TemplateDir)
+	if err != nil {
+		return fileWriteOutput{}, fmt.Errorf("sync template snapshot to %q: %w", northstar.TemplateDir, err)
 	}
 
 	return fileWriteOutput{Path: northstar.TemplateDir, Created: created}, nil

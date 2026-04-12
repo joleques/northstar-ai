@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	infratemplate "github.com/joleques/northstar-ai/src/infra/template"
@@ -173,5 +174,32 @@ func TestTemplateCatalogGatewayLoadFallsBackToRuntimeWhenClientTemplateMissing(t
 
 	if len(catalog.Assistants) != 1 || catalog.Assistants[0].ID != "runtime-assistant" {
 		t.Fatalf("expected fallback catalog from runtime template, got %#v", catalog.Assistants)
+	}
+}
+
+func TestTemplateCatalogGatewayLoadDefaultTemplateIncludesGovernanceTools(t *testing.T) {
+	t.Parallel()
+
+	gateway := infratemplate.NewCatalogGateway(filepath.Join("..", "..", "templates", "default"))
+	catalog, err := gateway.Load(context.Background(), "")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	names := make([]string, 0, len(catalog.Skills))
+	for _, skill := range catalog.Skills {
+		names = append(names, skill.Name)
+	}
+
+	for _, expected := range []string{
+		"triagem-demanda",
+		"plano-implementacao",
+		"quality-assurance",
+		"arquitetura-revisor",
+		"software-principles-revisor",
+	} {
+		if !slices.Contains(names, expected) {
+			t.Fatalf("expected default catalog to include %q, got %#v", expected, names)
+		}
 	}
 }

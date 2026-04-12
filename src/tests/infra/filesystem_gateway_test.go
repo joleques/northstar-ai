@@ -575,7 +575,7 @@ instructions: |
 	}
 }
 
-func TestFilesystemGatewayUpdateAppRefreshesManagedNonPlatformSkill(t *testing.T) {
+func TestFilesystemGatewayUpdateAppRefreshesTemplateToolsWithoutChangingUserInstalledSkill(t *testing.T) {
 	t.Parallel()
 
 	templateRoot := t.TempDir()
@@ -639,12 +639,21 @@ instructions: |
 		t.Fatalf("expected update-app to succeed, got %v", err)
 	}
 
+	templateToolPath := filepath.Join(outputDir, ".northstar", "template", "tools", "engineering-writer.yaml")
+	templateContent, err := os.ReadFile(templateToolPath)
+	if err != nil {
+		t.Fatalf("expected template tool snapshot to exist, got %v", err)
+	}
+	if !strings.Contains(string(templateContent), "v2 instructions") {
+		t.Fatalf("expected template tool snapshot to be updated to v2, got %s", string(templateContent))
+	}
+
 	skillPath := filepath.Join(outputDir, ".codex", "skills", "engineering-writer", "SKILL.md")
 	content, err := os.ReadFile(skillPath)
 	if err != nil {
 		t.Fatalf("expected managed non-platform skill to exist, got %v", err)
 	}
-	if !strings.Contains(string(content), "v2 instructions") {
-		t.Fatalf("expected managed non-platform skill to be updated to v2, got %s", string(content))
+	if !strings.Contains(string(content), "v1 instructions") {
+		t.Fatalf("expected user installed skill to remain unchanged, got %s", string(content))
 	}
 }
